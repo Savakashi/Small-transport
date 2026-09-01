@@ -223,10 +223,10 @@ def get_all_vehicles(db: Session = Depends(get_db)):
 @app.post("/api/v1/vehicles", status_code=status.HTTP_201_CREATED)
 def create_vehicle(payload: dict, db: Session = Depends(get_db)):
     new_vehicle = Vehicle(
-        registration_number=payload["registrationNumber"],
+        registration_number=payload["registration_number"],
         model=payload["model"],
-        vehicle_type=payload["vehicleType"],
-        max_payload_kg=payload["maxPayloadKg"],
+        vehicle_type=payload["vehicle_type"],
+        max_payload_kg=payload["max_payload_kg"],
         status=VehicleStatus.AVAILABLE
     )
     db.add(new_vehicle)
@@ -242,15 +242,31 @@ def create_vehicle(payload: dict, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/v1/drivers")
-def get_all_drivers(db: Session = Depends(get_db)):
-    drivers = db.query(Driver).all()
+def get_drivers(db: Session = Depends(get_db)):
+    # Join Driver with User on driver.user_id == user.id
+    drivers = (
+        db.query(
+            models.Driver.id,
+            models.User.name,
+            models.User.email,
+            models.User.phone,
+            models.Driver.license_number,
+            models.Driver.rating,
+            models.Driver.is_available,
+        )
+        .join(models.User, models.Driver.user_id == models.User.id)
+        .all()
+    )
+
     return [
         {
             "id": d.id,
-            "name": f"Driver #{d.id}",
-            "licenseNumber": d.license_number,
-            "isAvailable": d.is_available,
-            "rating": float(d.rating) if d.rating else 5.0
+            "name": d.name,
+            "email": d.email,
+            "phone": d.phone,
+            "license_number": d.license_number,
+            "rating": float(d.rating) if d.rating else 5.0,
+            "is_available": d.is_available,
         }
         for d in drivers
     ]

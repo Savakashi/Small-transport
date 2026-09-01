@@ -12,7 +12,8 @@ from sqlalchemy import (
     Enum as SQLEnum,
     create_engine,
     Text,
-    Float
+    Float,
+    Computed
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 import enum
@@ -132,7 +133,7 @@ class Invoice(Base):
     tax_amount = Column(Float, nullable=False)
 
     # Let PostgreSQL compute and return this value automatically
-    total_amount = Column(Float, server_default=FetchedValue(), nullable=False)
+    total_amount = Column(Float, Computed("base_fare + weight_surcharge + tax_amount", persisted=True), nullable=False)
     
     payment_status = Column(String(50), default="PENDING", nullable=False)
     issued_at = Column(DateTime, default=datetime.utcnow)

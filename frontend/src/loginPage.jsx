@@ -8,7 +8,6 @@ import {
   Phone,
   ArrowRight,
   AlertCircle,
-  UserCheck,
   CheckCircle2,
 } from "lucide-react";
 
@@ -21,7 +20,6 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("ROLE_CUSTOMER");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -51,14 +49,14 @@ export default function LoginPage() {
 
     try {
       if (isRegister) {
-        // --- REGISTER USER ---
+        // --- REGISTER USER (Always defaults to ROLE_CUSTOMER) ---
         const registerPayload = {
           name: name.trim(),
           full_name: name.trim(),
           email: email.trim().toLowerCase(),
           phone: phone.trim(),
           password: password,
-          role: role,
+          role: "ROLE_CUSTOMER",
         };
 
         const regResponse = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
@@ -121,7 +119,7 @@ export default function LoginPage() {
       localStorage.setItem("user_name", data.full_name || name);
       localStorage.setItem("user", JSON.stringify(userPayload));
 
-      // Redirect based on role
+      // Redirect based on role returned from backend
       handleRouteRedirect(data.role);
     } catch (err) {
       setError(err.message);
@@ -234,23 +232,6 @@ export default function LoginPage() {
                     placeholder="+91 9876543210"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
                   />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Account Type
-                </label>
-                <div className="relative">
-                  <UserCheck className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
-                  >
-                    <option value="ROLE_CUSTOMER">Freight Shipper / Customer</option>
-                    <option value="ROLE_DRIVER">Commercial Fleet Driver</option>
-                  </select>
                 </div>
               </div>
             </>

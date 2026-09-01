@@ -157,32 +157,50 @@ export default function CreateOrderPage() {
       weightKg: weight,
       fareAmount: totalAmount,
     };
+	try {
+	  const token = localStorage.getItem("token"); // Include token if protected route
 
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/bookings`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+	  const res = await fetch(`${API_BASE_URL}/api/v1/bookings`, {
+	    method: "POST",
+	    headers: {
+	      "Content-Type": "application/json",
+	      Accept: "application/json",
+	      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+	    },
+	    body: JSON.stringify(payload),
+	  });
 
-      if (!res.ok) {
-        const err = await res.json();
-        const msg = Array.isArray(err.detail)
-          ? err.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join("\n")
-          : err.detail;
-        throw new Error(msg || "Failed to create shipment order");
-      }
+	  // 1. Read raw response text first
+	  const rawText = await res.text();
 
-      navigate("/customer");
-    } catch (err) {
-      setErrorMsg(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+	  // 2. Safely parse JSON if possible
+	  let data;
+	  try {
+	    data = rawText ? JSON.parse(rawText) : {};
+	  } catch (parseError) {
+	    // If the server returned HTML (500/502/404 page)
+	    console.error("Non-JSON Server Response:", rawText);
+	    throw new Error(
+	      `Server Error (Status ${res.status}): Please check backend logs.`
+	    );
+	  }
+
+	  // 3. Handle non-200 responses
+	  if (!res.ok) {
+	    const msg = Array.isArray(data.detail)
+	      ? data.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join("\n")
+	      : data.detail;
+	    throw new Error(msg || `Failed to create shipment order (${res.status})`);
+	  }
+
+	  // 4. Success navigation
+	  navigate("/customer");
+	} catch (err) {
+	  setErrorMsg(err.message);
+	} finally {
+	  setSubmitting(false);
+	} 
+ };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 sm:p-6 font-sans">
