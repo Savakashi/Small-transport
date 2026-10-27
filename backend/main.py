@@ -18,6 +18,22 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Transport & Logistics API", version="1.0.0")
 
+CONTAINER_INSTANCE_ID = socket.gethostname()
+
+@app.middleware("http")
+async def add_load_balancer_telemetry_header(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["X-Backend-Instance"] = CONTAINER_INSTANCE_ID
+    return response
+
+@app.get("/healthz")
+def health_check():
+    return {
+        "status": "healthy",
+        "served_by_instance": CONTAINER_INSTANCE_ID
+    }
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  
@@ -46,7 +62,6 @@ def calculate_haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2:
 
     return round(R * c, 2)
 
-@app.get("/healthz", status_code=status.HTTP_200_OK, tags=["Health"])
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["Health"])
 def health_check(db: Session = Depends(get_db)):
     try:
