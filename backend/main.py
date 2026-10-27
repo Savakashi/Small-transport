@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Query, status, APIRouter
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
@@ -13,6 +14,7 @@ from typing import Optional
 from passlib.context import CryptContext
 import bcrypt
 import math
+import socket
 
 models.Base.metadata.create_all(bind=engine)
 
