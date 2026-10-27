@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   MapPin,
@@ -14,6 +14,9 @@ import {
   Scale,
   Calendar,
   X,
+  Search,
+  Loader2,
+  Navigation,
 } from "lucide-react";
 
 export default function CreateOrderPage() {
@@ -49,9 +52,19 @@ export default function CreateOrderPage() {
     address: "",
     city: "",
     postalCode: "",
+    latitude: null,
+    longitude: null,
   });
 
+  // Geoapify Autocomplete State
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef(null);
+
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const GEOAPIFY_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY || "";
 
   // 1. Fetch User Saved Locations
   const fetchLocations = async () => {
@@ -79,15 +92,128 @@ export default function CreateOrderPage() {
     if (customerId) fetchLocations();
   }, [customerId]);
 
-  // 2. Real-time Invoice Breakdown Calculation
+  // 2. Geoapify Autocomplete Query with Debounce
+  useEffect(() => {
+    if (!searchQuery.trim() || searchQuery.length < 3) {
+      setSuggestions([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    if (!GEOAPIFY_KEY) return;
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await fetch(
+          `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(
+            searchQuery
+          )}&filter=countrycode:in&format=json&apiKey=${GEOAPIFY_KEY}`
+        );
+        const data = await res.json();
+        setSuggestions(data.results || []);
+        setShowDropdown(true);
+      } catch (err) {
+        console.error("Geoapify search error:", err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, GEOAPIFY_KEY]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Handle Selection from Geoapify Suggestions
+  const handleSelectSuggestion = (item) => {
+    const formattedAddress = item.formatted || item.address_line1 || "";
+    const detectedCity = item.city || item.county || item.state || "";
+    const detectedPostcode = item.postcode || "";
+
+    setNewLocationForm((prev) => ({
+      ...prev,
+      address: formattedAddress,
+      city: detectedCity,
+      postalCode: detectedPostcode,
+      title: prev.title || (detectedCity ? `${detectedCity} Logistics Hub` : "Facility"),
+      latitude: item.lat ? parseFloat(item.lat) : null,
+      longitude: item.lon ? parseFloat(item.lon) : null,
+    }));
+
+    setSearchQuery(formattedAddress);
+    setShowDropdown(false);
+  };
+
+
+  //3
+const pickupLoc = locations.find(
+  (l) => String(l?.id) === String(pickupLocationId)
+);
+const dropoffLoc = locations.find(
+  (l) => String(l?.id) === String(dropoffLocationId)
+);
+
+// Diagnostic log (check F12 Console when changing dropdowns)
+console.log("Selected Pickup:", pickupLoc?.title, "Coords:", pickupLoc?.latitude, pickupLoc?.longitude);
+console.log("Selected Dropoff:", dropoffLoc?.title, "Coords:", dropoffLoc?.latitude, dropoffLoc?.longitude);
+
+let calculatedDistanceKm = 0;
+
+if (
+  pickupLoc &&
+  dropoffLoc &&
+  pickupLoc.latitude != null &&
+  pickupLoc.longitude != null &&
+  dropoffLoc.latitude != null &&
+  dropoffLoc.longitude != null
+) {
+  const pLat = parseFloat(pickupLoc.latitude);
+  const pLon = parseFloat(pickupLoc.longitude);
+  const dLatVal = parseFloat(dropoffLoc.latitude);
+  const dLonVal = parseFloat(dropoffLoc.longitude);
+
+  if (!isNaN(pLat) && !isNaN(pLon) && !isNaN(dLatVal) && !isNaN(dLonVal)) {
+    const R = 6371.0; // Radius of Earth in KM
+    const dLat = ((dLatVal - pLat) * Math.PI) / 180;
+    const dLon = ((dLonVal - pLon) * Math.PI) / 180;
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((pLat * Math.PI) / 180) *
+        Math.cos((dLatVal * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const rawDist = R * c;
+
+    calculatedDistanceKm = Math.max(1, Math.round(rawDist));
+  }
+}
+
+console.log("Calculated Distance (KM):", calculatedDistanceKm);
+
+  // 4. Real-time Invoice & Quotation Calculation
   const weight = parseFloat(weightKg) || 0;
   const baseFare = 500.0;
-  const weightSurcharge = weight * 2.5;
-  const subtotal = baseFare + weightSurcharge;
+  const weightSurcharge = Number((weight * 2.5).toFixed(2));
+  const distanceRatePerKm = 12.0;
+  const distanceCharge = Number((calculatedDistanceKm * distanceRatePerKm).toFixed(2));
+  const subtotal = Number((baseFare + weightSurcharge + distanceCharge).toFixed(2));
   const gstAmount = Number((subtotal * 0.18).toFixed(2));
   const totalAmount = Number((subtotal + gstAmount).toFixed(2));
 
-  // 3. Save New Location Handler
+  // 5. Save New Location Handler
   const handleSaveLocation = async (e) => {
     e.preventDefault();
     setAddingLoc(true);
@@ -104,6 +230,8 @@ export default function CreateOrderPage() {
           address: newLocationForm.address.trim(),
           city: newLocationForm.city.trim(),
           postalCode: newLocationForm.postalCode.trim() || null,
+          latitude: newLocationForm.latitude,
+          longitude: newLocationForm.longitude,
         }),
       });
 
@@ -114,7 +242,16 @@ export default function CreateOrderPage() {
 
       const created = await res.json();
       setShowAddModal(false);
-      setNewLocationForm({ companyName: "", title: "", address: "", city: "", postalCode: "" });
+      setNewLocationForm({
+        companyName: "",
+        title: "",
+        address: "",
+        city: "",
+        postalCode: "",
+        latitude: null,
+        longitude: null,
+      });
+      setSearchQuery("");
 
       await fetchLocations();
       if (!pickupLocationId) setPickupLocationId(String(created.id));
@@ -126,7 +263,7 @@ export default function CreateOrderPage() {
     }
   };
 
-  // 4. Create Order & Auto-Generate Invoice
+  // 6. Create Order & Auto-Generate Invoice
   const handleCreateBooking = async (e) => {
     e.preventDefault();
     setErrorMsg("");
@@ -155,57 +292,51 @@ export default function CreateOrderPage() {
       pickupTime: pickupTime ? new Date(pickupTime).toISOString() : new Date().toISOString(),
       cargoType,
       weightKg: weight,
+      distanceKm: calculatedDistanceKm,
       fareAmount: totalAmount,
     };
-	try {
-	  const token = localStorage.getItem("token"); // Include token if protected route
 
-	  const res = await fetch(`${API_BASE_URL}/api/v1/bookings`, {
-	    method: "POST",
-	    headers: {
-	      "Content-Type": "application/json",
-	      Accept: "application/json",
-	      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-	    },
-	    body: JSON.stringify(payload),
-	  });
+    try {
+      const token = localStorage.getItem("token");
 
-	  // 1. Read raw response text first
-	  const rawText = await res.text();
+      const res = await fetch(`${API_BASE_URL}/api/v1/bookings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
 
-	  // 2. Safely parse JSON if possible
-	  let data;
-	  try {
-	    data = rawText ? JSON.parse(rawText) : {};
-	  } catch (parseError) {
-	    // If the server returned HTML (500/502/404 page)
-	    console.error("Non-JSON Server Response:", rawText);
-	    throw new Error(
-	      `Server Error (Status ${res.status}): Please check backend logs.`
-	    );
-	  }
+      const rawText = await res.text();
+      let data;
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseError) {
+        console.error("Non-JSON Server Response:", rawText);
+        throw new Error(`Server Error (Status ${res.status}): Please check backend logs.`);
+      }
 
-	  // 3. Handle non-200 responses
-	  if (!res.ok) {
-	    const msg = Array.isArray(data.detail)
-	      ? data.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join("\n")
-	      : data.detail;
-	    throw new Error(msg || `Failed to create shipment order (${res.status})`);
-	  }
+      if (!res.ok) {
+        const msg = Array.isArray(data.detail)
+          ? data.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join("\n")
+          : data.detail;
+        throw new Error(msg || `Failed to create shipment order (${res.status})`);
+      }
 
-	  // 4. Success navigation
-	  navigate("/customer");
-	} catch (err) {
-	  setErrorMsg(err.message);
-	} finally {
-	  setSubmitting(false);
-	} 
- };
+      navigate("/customer");
+    } catch (err) {
+      setErrorMsg(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 sm:p-6 font-sans">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Navigation & Header */}
+      <div className="max-w-5xl mx-auto space-y-6">
+        {/* Navigation & Actions */}
         <div className="flex items-center justify-between">
           <button
             onClick={() => navigate("/customer")}
@@ -223,7 +354,7 @@ export default function CreateOrderPage() {
           </button>
         </div>
 
-        {/* Alert Notifications */}
+        {/* Error Notification */}
         {errorMsg && (
           <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -350,7 +481,7 @@ export default function CreateOrderPage() {
             </form>
           </div>
 
-          {/* Live Dynamic Invoice Breakdown Preview */}
+          {/* Dynamic Live Invoice & Quotation Preview */}
           <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between space-y-6">
             <div>
               <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
@@ -363,6 +494,23 @@ export default function CreateOrderPage() {
                 </span>
               </div>
 
+              {/* Transit Route Distance Indicator */}
+              <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <Navigation className="w-4 h-4 text-emerald-600" />
+                  <span className="font-semibold">Calculated Distance:</span>
+                </div>
+                <div className="text-right">
+                  {calculatedDistanceKm > 0 ? (
+                    <span className="font-mono font-bold text-emerald-700 text-sm">
+                      {calculatedDistanceKm} km
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 italic">Local / Base Zone</span>
+                  )}
+                </div>
+              </div>
+
               <div className="space-y-3 text-xs text-slate-600">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Base Dispatch Charge:</span>
@@ -372,6 +520,14 @@ export default function CreateOrderPage() {
                   <span className="text-slate-500">Weight Surcharge ({weight} kg × ₹2.50):</span>
                   <span className="font-mono font-semibold text-slate-900">₹{weightSurcharge.toFixed(2)}</span>
                 </div>
+                {calculatedDistanceKm > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">
+                      Transit Surcharge ({calculatedDistanceKm} km × ₹{distanceRatePerKm.toFixed(2)}):
+                    </span>
+                    <span className="font-mono font-semibold text-slate-900">₹{distanceCharge.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-slate-500">Subtotal Net Fare:</span>
                   <span className="font-mono font-semibold text-slate-900">₹{subtotal.toFixed(2)}</span>
@@ -395,14 +551,14 @@ export default function CreateOrderPage() {
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Normalized Address Integrity
               </p>
               <p>
-                Addresses link directly to foreign keys in the <code>locations</code> table and automatically lock the rate inside <code>invoices</code>.
+                Addresses link directly to foreign keys in the <code>locations</code> table and automatically lock the rate inside <code>invoices</code>[cite: 30].
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Modal: Add New Location */}
+      {/* Modal: Add New Location with Geoapify Autocomplete */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
           <div className="bg-white border border-slate-200 rounded-2xl p-6 max-w-lg w-full shadow-xl space-y-4">
@@ -412,11 +568,53 @@ export default function CreateOrderPage() {
                 <h3 className="text-sm font-bold text-slate-900">Save Business Location</h3>
               </div>
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={() => {
+                  setShowAddModal(false);
+                  setSearchQuery("");
+                }}
                 className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition"
               >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Geoapify Live Address Autocomplete Input */}
+            <div className="relative" ref={dropdownRef}>
+              <label className="block text-slate-700 uppercase font-bold text-[10px] mb-1">
+                Search via Geoapify (Live Indian Address / Hub)
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Type hub name, MIDC area, or road (e.g. Bhosari, Pune)..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-9 pr-9 py-2.5 text-xs text-slate-900 outline-none focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                {isSearching && (
+                  <Loader2 className="w-4 h-4 text-emerald-600 animate-spin absolute right-3 top-2.5" />
+                )}
+              </div>
+
+              {/* Suggestions Dropdown */}
+              {showDropdown && suggestions.length > 0 && (
+                <ul className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-52 overflow-y-auto divide-y divide-slate-100">
+                  {suggestions.map((item, index) => (
+                    <li
+                      key={index}
+                      onClick={() => handleSelectSuggestion(item)}
+                      className="p-2.5 hover:bg-emerald-50 cursor-pointer text-left transition-colors flex items-start gap-2 text-xs"
+                    >
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="font-semibold text-slate-800">{item.address_line1 || item.formatted}</p>
+                        <p className="text-[10px] text-slate-500">{item.address_line2 || item.city || item.state}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <form onSubmit={handleSaveLocation} className="space-y-3 text-xs">
@@ -436,7 +634,7 @@ export default function CreateOrderPage() {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Gate 3 Facility"
+                    placeholder="e.g. Pune Central Hub"
                     value={newLocationForm.title}
                     onChange={(e) => setNewLocationForm({ ...newLocationForm, title: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 outline-none focus:bg-white focus:border-emerald-500 transition"
@@ -483,7 +681,10 @@ export default function CreateOrderPage() {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setSearchQuery("");
+                  }}
                   className="px-4 py-2 rounded-xl text-slate-500 hover:bg-slate-100 transition font-semibold"
                 >
                   Cancel

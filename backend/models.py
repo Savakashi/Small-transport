@@ -89,6 +89,7 @@ class Driver(Base):
 
 class Location(Base):
     __tablename__ = "locations"
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     company_name = Column(String(150), nullable=True)
@@ -96,8 +97,11 @@ class Location(Base):
     address = Column(Text, nullable=False)
     city = Column(String(100), nullable=False)
     postal_code = Column(String(20), nullable=True)
+    
+    latitude = Column(Numeric(10, 7), nullable=True)
+    longitude = Column(Numeric(10, 7), nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
-
     user = relationship("User", back_populates="locations")
 
 
@@ -113,7 +117,11 @@ class Booking(Base):
     pickup_time = Column(DateTime, default=datetime.utcnow, nullable=False)
     cargo_type = Column(String(100), default="Standard Freight")
     weight_kg = Column(Float, nullable=False)
-    status = Column(String(50), default="PENDING", nullable=False)
+    status =status = Column(
+        SQLEnum(BookingStatus,name="booking_status_enum"),
+        default=BookingStatus.PENDING,
+        nullable=False,
+    )
     created_at = Column(DateTime, default=datetime.utcnow)
 
     customer = relationship("User", back_populates="bookings")
@@ -144,7 +152,6 @@ class UserRole(str, enum.Enum):
     ROLE_CUSTOMER = "ROLE_CUSTOMER"
     ROLE_DRIVER = "ROLE_DRIVER"
     ROLE_ADMIN = "ROLE_ADMIN"
-    ROLE_DISPATCHER = "ROLE_DISPATCHER"
 
 class User(Base):
     __tablename__ = "users"
@@ -159,7 +166,7 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "role IN ('ROLE_CUSTOMER', 'ROLE_DRIVER', 'ROLE_ADMIN', 'ROLE_DISPATCHER')",
+            "role IN ('ROLE_CUSTOMER', 'ROLE_DRIVER', 'ROLE_ADMIN')",
             name="check_valid_user_role"
         ),
     )

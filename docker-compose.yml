@@ -34,6 +34,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_GEOAPIFY_API_KEY: 003ced22d0da4c53b68c6ee4451bab7e
     container_name: transport_frontend
     restart: unless-stopped
     ports:

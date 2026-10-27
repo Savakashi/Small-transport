@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Query, status, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 import models
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
 import bcrypt
+import math
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -30,6 +32,19 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def calculate_haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0
+
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = (math.sin(delta_phi / 2.0) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return round(R * c, 2)
 
 @app.get("/healthz", status_code=status.HTTP_200_OK, tags=["Health"])
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["Health"])
@@ -59,42 +74,65 @@ def map_booking_response(booking: Booking) -> schemas.BookingResponse:
     )
 
 @app.post("/api/v1/bookings", status_code=status.HTTP_201_CREATED)
+@app.post("/api/v1/bookings")
 def create_booking(payload: schemas.BookingCreate, db: Session = Depends(get_db)):
-    p_loc = db.query(models.Location).filter(models.Location.id == payload.pickup_location_id).first()
-    d_loc = db.query(models.Location).filter(models.Location.id == payload.dropoff_location_id).first()
+    # 1. Fetch origin and destination locations
+    pickup = db.query(models.Location).filter(models.Location.id == payload.pickup_location_id).first()
+    dropoff = db.query(models.Location).filter(models.Location.id == payload.dropoff_location_id).first()
 
-    if not p_loc or not d_loc:
-        raise HTTPException(status_code=400, detail="Invalid pickup or dropoff location ID")
+    if not pickup or not dropoff:
+        raise HTTPException(status_code=404, detail="Selected location not found.")
 
-    base_fare = 100.0
-    weight_surcharge = round(float(payload.weight_kg) * 2.5, 2)
-    subtotal = base_fare + weight_surcharge
-    tax_amount = round(subtotal * 0.18, 2)
+    if pickup.id == dropoff.id:
+        raise HTTPException(status_code=400, detail="Pickup and dropoff locations cannot be identical.")
 
-    new_booking = models.Booking(
+    # 2. Determine Distance (km)
+    trip_distance_km = 0.0
+    if pickup.latitude and pickup.longitude and dropoff.latitude and dropoff.longitude:
+        trip_distance_km = calculate_haversine_distance_km(
+            float(pickup.latitude), float(pickup.longitude),
+            float(dropoff.latitude), float(dropoff.longitude)
+        )
+
+    base_fare = 500.00
+    weight_surcharge = round(float(payload.weight_kg) * 2.50, 2)
+    distance_charge = round(trip_distance_km * 12.00, 2) if trip_distance_km > 0 else 0.0
+
+    subtotal = base_fare + weight_surcharge + distance_charge
+    tax_amount = round(subtotal * 0.18, 2) 
+
+    new_booking = Booking(
         customer_id=payload.customer_id,
         pickup_location_id=payload.pickup_location_id,
         dropoff_location_id=payload.dropoff_location_id,
-        pickup_time=payload.pickup_time or datetime.utcnow(),
-        cargo_type=payload.cargo_type or "Standard Freight",
+        pickup_time=payload.pickup_time,
+        cargo_type=payload.cargo_type,
         weight_kg=payload.weight_kg,
         status="PENDING",
     )
     db.add(new_booking)
     db.flush()
 
-    # 4. Create Ledger Invoice (total_amount is calculated and stored by DB)
-    invoice = models.Invoice(
+    invoice_number = f"INV-{datetime.utcnow().year}-{new_booking.id:04d}"
+    new_invoice = models.Invoice(
         booking_id=new_booking.id,
-        invoice_number=f"INV-{datetime.utcnow().year}-{new_booking.id:04d}",
+        invoice_number=invoice_number,
         base_fare=base_fare,
-        weight_surcharge=weight_surcharge,
-        tax_amount=tax_amount
+        weight_surcharge=weight_surcharge + distance_charge, 
+        tax_amount=tax_amount,
     )
-    db.add(invoice)
+    db.add(new_invoice)
     db.commit()
-    db.refresh(new_booking)
-    return new_booking
+
+    return {
+        "booking_id": new_booking.id,
+        "distance_km": trip_distance_km,
+        "base_fare": base_fare,
+        "weight_surcharge": weight_surcharge,
+        "distance_charge": distance_charge,
+        "tax_amount": tax_amount,
+        "total_amount": round(subtotal + tax_amount, 2),
+    }
 
 @app.get("/api/v1/bookings", response_model=List[schemas.BookingOut])
 def get_bookings(
@@ -113,7 +151,6 @@ def get_bookings(
         query = query.filter(models.Booking.customer_id == customer_id)
 
     if driver_id is not None:
-        # Resolve driver profile if user_id was passed
         driver = db.query(models.Driver).filter(
             (models.Driver.id == driver_id) | (models.Driver.user_id == driver_id)
         ).first()
@@ -125,7 +162,6 @@ def get_bookings(
 
     bookings = query.order_by(models.Booking.id.desc()).all()
 
-    # Formatted response with resolved address strings
     results = []
     for b in bookings:
         pickup_str = (
@@ -168,13 +204,24 @@ def dispatch_booking(booking_id: int,  payload: schemas.DispatchRequest, db: Ses
     v_id = payload.vehicle_id
     d_id = payload.driver_id
 
+    vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == v_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    if vehicle.max_payload_kg is not None and float(booking.weight_kg) > float(vehicle.max_payload_kg):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cargo weight ({float(booking.weight_kg):g} kg) exceeds the maximum payload "
+                f"of vehicle {vehicle.registration_number} ({float(vehicle.max_payload_kg):g} kg)"
+            ),
+        )
+
     booking.vehicle_id = v_id
     booking.driver_id = d_id
     booking.status = "IN_TRANSIT"
 
-    vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == v_id).first()
-    if vehicle:
-        vehicle.status = "ON_TRIP"
+    vehicle.status = "ON_TRIP"
 
     driver = db.query(models.Driver).filter(models.Driver.id == d_id).first()
     if driver:
@@ -243,7 +290,6 @@ def create_vehicle(payload: dict, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/drivers")
 def get_drivers(db: Session = Depends(get_db)):
-    # Join Driver with User on driver.user_id == user.id
     drivers = (
         db.query(
             models.Driver.id,
@@ -353,12 +399,10 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/drivers", status_code=status.HTTP_201_CREATED)
 def create_driver(payload: schemas.DriverCreate, db: Session = Depends(get_db)):
-    # 1. Check if email already exists
     existing = db.query(models.User).filter(models.User.email == payload.email.strip().lower()).first()
     if existing:
         raise HTTPException(status_code=400, detail="User with this email already exists")
 
-    # 2. Create User account with ROLE_DRIVER
     pwd_hash = get_password_hash(payload.password)
     user = models.User(
         name=payload.name,
@@ -380,41 +424,33 @@ def create_driver(payload: schemas.DriverCreate, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Driver registered successfully", "driver_id": driver.id}
 
-@app.post("/api/v1/locations", response_model=schemas.LocationOut, status_code=status.HTTP_201_CREATED)
+@app.post("/api/v1/locations", response_model=schemas.LocationResponse)
 def create_location(payload: schemas.LocationCreate, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.id == payload.user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with ID {payload.user_id} not found."
-        )
-
     new_loc = models.Location(
-        user_id=payload.user_id,
-        company_name=payload.company_name,
-        title=payload.title.strip(),
-        address=payload.address.strip(),
-        city=payload.city.strip(),
-        postal_code=payload.postal_code,
+        user_id=payload.userId,
+        company_name=payload.companyName,
+        title=payload.title,
+        address=payload.address,
+        city=payload.city,
+        postal_code=payload.postalCode,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
     )
     db.add(new_loc)
     db.commit()
     db.refresh(new_loc)
     return new_loc
 
-
-@app.get("/api/v1/locations", response_model=List[schemas.LocationOut])
+@app.get("/api/v1/locations", response_model=List[schemas.LocationResponse])
 def get_user_locations(user_id: int, db: Session = Depends(get_db)):
     return db.query(models.Location).filter(models.Location.user_id == user_id).all()
 
 @app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
 def register_user(payload: schemas.UserRegister, db: Session = Depends(get_db)):
-    # Check if email exists
     existing_user = db.query(models.User).filter(models.User.email == payload.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash password
     salt = bcrypt.gensalt()
     hashed_password = bcrypt.hashpw(payload.password.encode('utf-8'), salt).decode('utf-8')
 
@@ -429,7 +465,6 @@ def register_user(payload: schemas.UserRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    # Auto-create driver profile if registering as driver
     if payload.role == "ROLE_DRIVER":
         new_driver = models.Driver(
             user_id=new_user.id,

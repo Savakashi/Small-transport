@@ -69,23 +69,31 @@ class BookingCreate(BaseModel):
     class Config:
         populate_by_name = True
         allow_population_by_field_name = True
+
 class LocationCreate(BaseModel):
-    user_id: int = Field(..., alias="userId")
-    company_name: Optional[str] = Field(None, alias="companyName")
+    userId: int
+    companyName: Optional[str] = None
     title: str
     address: str
     city: str
-    postal_code: Optional[str] = Field(None, alias="postalCode")
+    postalCode: Optional[str] = None
+    latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
+    longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
+
+class LocationResponse(BaseModel):
+    id: int
+    user_id: int
+    company_name: Optional[str]
+    title: str
+    address: str
+    city: str
+    postal_code: Optional[str]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    created_at: datetime
 
     class Config:
-        populate_by_name = True
-
-    @field_validator("company_name", "postal_code", mode="before")
-    @classmethod
-    def empty_str_to_none(cls, v):
-        if v == "" or v is None:
-            return None
-        return str(v).strip()
+        from_attributes = True
 
 class LocationOut(BaseModel):
     id: int

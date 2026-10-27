@@ -2,6 +2,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+ARG VITE_GEOAPIFY_API_KEY
+ENV VITE_GEOAPIFY_API_KEY=$VITE_GEOAPIFY_API_KEY
+
 COPY package*.json ./
 RUN npm install
 

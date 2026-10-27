@@ -22,6 +22,14 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
+    CREATE TYPE vehicle_status_enum AS ENUM (
+        'AVAILABLE', 'ON_TRIP', 'MAINTENANCE', 'INACTIVE'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
     CREATE TYPE vehicle_type_enum AS ENUM (
         'LIGHT_TRUCK', 'HEAVY_TRAILER', 'BOX_TRUCK', 'CONTAINER', 'VAN'
     );
@@ -42,8 +50,7 @@ CREATE TABLE IF NOT EXISTS users (
         role::text = ANY (ARRAY[
             'ROLE_CUSTOMER'::character varying,
             'ROLE_DRIVER'::character varying,
-            'ROLE_ADMIN'::character varying,
-            'ROLE_DISPATCHER'::character varying
+            'ROLE_ADMIN'::character varying
         ]::text[])
     )
 );
@@ -140,3 +147,13 @@ VALUES (
     '$2b$12$FO.o/6Y4MSsztifD7QMtAeb/q877aoPg/XfFlo46U6QEt90td1sx6',
     'ROLE_ADMIN'
 );
+
+-- Add coordinates to the existing locations table
+ALTER TABLE locations 
+ADD COLUMN IF NOT EXISTS latitude NUMERIC(10, 7),
+ADD COLUMN IF NOT EXISTS longitude NUMERIC(10, 7);
+
+-- Add engine constraint ensuring valid coordinate boundaries
+ALTER TABLE locations
+ADD CONSTRAINT chk_valid_latitude CHECK (latitude IS NULL OR (latitude >= -90.0 AND latitude <= 90.0)),
+ADD CONSTRAINT chk_valid_longitude CHECK (longitude IS NULL OR (longitude >= -180.0 AND longitude <= 180.0));

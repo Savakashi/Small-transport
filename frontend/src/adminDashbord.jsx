@@ -715,7 +715,11 @@ export default function AdminDashboard() {
                 >
                   <option value="">-- Choose Available Vehicle --</option>
                   {vehicles
-                    .filter((v) => v.status === "AVAILABLE")
+                    .filter((v) => {
+                      const capacity = Number(v.max_payload_kg || v.maxPayloadKg || 0);
+                      const cargoWeight = Number(selectedBooking.weight_kg || selectedBooking.weightKg || 0);
+                      return v.status === "AVAILABLE" && (capacity === 0 || capacity >= cargoWeight);
+                    })
                     .map((v) => (
                       <option key={v.id} value={v.id}>
                         {v.registration_number || v.registrationNumber} ({v.vehicle_type || v.vehicleType} - max{" "}
